@@ -266,6 +266,92 @@ static void h_jobs(int c) {
   free(buf);
 }
 
+/* ---- fs operations (move/copy/mkdir/delete) ---- */
+
+static void json_str_get(const char* body, const char* key, char* out, size_t cap) {
+  out[0] = '\0';
+  char pat[32];
+  snprintf(pat, sizeof pat, "\"%s\"", key);
+  const char* p = strstr(body, pat);
+  if(!p) return;
+  p = strchr(p + strlen(pat), '"');
+  if(!p) return;
+  p++;
+  const char* e = strchr(p, '"');
+  if(!e) return;
+  size_t n = e - p;
+  if(n >= cap) n = cap - 1;
+  memcpy(out, p, n);
+  out[n] = '\0';
+}
+
+static int copy_file(const char* src, const char* dst) {
+  FILE* in = fopen(src, "rb");
+  if(!in) return -1;
+  FILE* out = fopen(dst, "wb");
+  if(!out) { fclose(in); return -1; }
+  char* buf = malloc(65536);
+  size_t n;
+  while((n = fread(buf, 1, 65536, in)) > 0) {
+    if(fwrite(buf, 1, n, out) != n) { free(buf); fclose(in); fclose(out); return -1; }
+  }
+  free(buf);
+  fclose(in); fclose(out);
+  return 0;
+}
+
+static int rm_rf(const char* path, int depth) {
+  if(depth > 16) return -1;
+  struct stat st;
+  if(stat(path, &st) != 0) return -1;
+  if(!S_ISDIR(st.st_mode)) return unlink(path);
+  DIR* d = opendir(path);
+  if(!d) return -1;
+  struct dirent* e;
+  int rc = 0;
+  while((e = readdir(d)) != 0) {
+    if(!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    char full[1024];
+    snprintf(full, sizeof full, "%s%s%s", path, path[strlen(path)-1]=='/' ? "" : "/", e->d_name);
+    if(rm_rf(full, depth + 1) != 0) rc = -1;
+  }
+  closedir(d);
+  if(rmdir(path) != 0) rc = -1;
+  return rc;
+}
+
+/* POST /api/fs/move|copy {src, dst_dir} ; POST /api/fs/mkdir {path} ; POST /api/fs/delete {path} */
+static void h_fs_op(int c, const char* op, const char* body) {
+  char src[1024], dst[1024], path[1024];
+  char final[2048];
+  if(strcmp(op, "mkdir") == 0) {
+    json_str_get(body, "path", path, sizeof path);
+    if(!path[0]) { resp_json(c, 400, "{\"error\":\"path required\"}"); return; }
+    if(mkdir(path, 0777) == 0) resp_json(c, 200, "{\"ok\":true}");
+    else { char b[256]; snprintf(b, sizeof b, "{\"error\":\"mkdir: %s\"}", strerror(errno)); resp_json(c, 400, b); }
+    return;
+  }
+  if(strcmp(op, "delete") == 0) {
+    json_str_get(body, "path", path, sizeof path);
+    if(!path[0]) { resp_json(c, 400, "{\"error\":\"path required\"}"); return; }
+    if(rm_rf(path, 0) == 0) resp_json(c, 200, "{\"ok\":true}");
+    else { char b[256]; snprintf(b, sizeof b, "{\"error\":\"delete: %s\"}", strerror(errno)); resp_json(c, 400, b); }
+    return;
+  }
+  /* move / copy */
+  json_str_get(body, "src", src, sizeof src);
+  json_str_get(body, "dst_dir", dst, sizeof dst);
+  if(!src[0] || !dst[0]) { resp_json(c, 400, "{\"error\":\"src and dst_dir required\"}"); return; }
+  const char* base = strrchr(src, '/');
+  base = base ? base + 1 : src;
+  snprintf(final, sizeof final, "%s%s%s", dst, dst[strlen(dst)-1]=='/' ? "" : "/", base);
+  int rc;
+  if(strcmp(op, "move") == 0) rc = rename(src, final);
+  else rc = copy_file(src, final);
+  if(rc == 0) { char f[1200]; jstr(f, sizeof f, final); char b[1400]; snprintf(b, sizeof b, "{\"ok\":true,\"path\":%s}", f); resp_json(c, 200, b); }
+  else { char b[256]; snprintf(b, sizeof b, "{\"error\":\"%s: %s\"}", op, strerror(errno)); resp_json(c, 400, b); }
+}
+
 static const char STATUS_JSON[] =
   "{\"app\":\"agata_ps5_websrv\",\"version\":\"0.2.0\",\"status\":\"running\","
   "\"platform\":\"PS5\",\"sdk\":\"ps5-payload-sdk\",\"endpoints\":"
@@ -354,6 +440,16 @@ int main() {
     } else if(strncmp(path, "/api/fs/download", 16) == 0) {
       if(get_param(buf, "path", param, sizeof param) == 0) h_fs_download(c, param);
       else resp_json(c, 400, "{\"error\":\"path required\"}");
+    } else if(strncmp(path, "/api/fs/move", 12) == 0 ||
+              strncmp(path, "/api/fs/copy", 12) == 0 ||
+              strncmp(path, "/api/fs/mkdir", 13) == 0 ||
+              strncmp(path, "/api/fs/delete", 14) == 0) {
+      char* body = strstr(buf, "\r\n\r\n");
+      const char* op = strncmp(path, "/api/fs/move", 12) == 0 ? "move"
+                     : strncmp(path, "/api/fs/copy", 12) == 0 ? "copy"
+                     : strncmp(path, "/api/fs/mkdir", 13) == 0 ? "mkdir" : "delete";
+      if(body) h_fs_op(c, op, body + 4);
+      else resp_json(c, 400, "{\"error\":\"body required\"}");
     } else if(strncmp(path, "/api/jobs", 9) == 0) {
       h_jobs(c);
     } else if(strncmp(path, "/api/fetch", 10) == 0) {

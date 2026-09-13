@@ -84,13 +84,7 @@
   </section>
 
   <section id="tab-files" style="display:none">
-    <div class="row">
-      <button class="btn ghost small" onclick="nav('/mnt')">/mnt</button>
-      <button class="btn ghost small" onclick="nav('/data')">/data</button>
-      <button class="btn ghost small" onclick="nav('/')">/</button>
-    </div>
-    <div class="crumbs" id="crumbs"></div>
-    <div class="panel"><table><thead><tr><th>Name</th><th style="width:110px">Size</th><th style="width:150px">Type</th><th style="width:110px"></th></tr></thead><tbody id="fsbody"></tbody></table></div>
+    <div id="dualpane" style="display:grid;grid-template-columns:1fr 1fr;gap:16px"></div>
   </section>
 
   <section id="tab-downloads" style="display:none">
@@ -119,7 +113,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   b.classList.add('active');
   ['store','files','downloads','status'].forEach(t=>
     document.getElementById('tab-'+t).style.display = t===b.dataset.tab?'':'none');
-  if(b.dataset.tab==='files') nav(curPath);
+  if(b.dataset.tab==='files') renderPanes();
   if(b.dataset.tab==='downloads') refreshJobs();
   if(b.dataset.tab==='status') loadStatus();
   if(b.dataset.tab==='store') renderStore();
@@ -219,25 +213,101 @@ async function refreshJobs(){
 }
 setInterval(()=>{if(document.getElementById('tab-downloads').style.display!=='none')refreshJobs();},2000);
 
-// ---- files ----
-async function nav(path){
-  curPath=path;
-  document.getElementById('crumbs').innerHTML='path: <b>'+esc(path)+'</b>';
+// ---- files: dual-pane manager ----
+const PANES=[{path:'/mnt'},{path:'/data'}];   // pane state
+let activePane=0;                              // which pane an action targets
+let lastPaneRender=[];
+
+function otherPane(i){return i===0?1:0;}
+function parentOf(p){const i=p.lastIndexOf('/');return i<=0?'/':p.slice(0,i);}
+
+async function paneNav(i,path){
+  PANES[i].path=path;
+  const host=document.getElementById('pane'+i);
+  if(!host)return;
+  host.querySelector('.tbody').innerHTML='<tr><td colspan="4" class="empty">loading…</td></tr>';
   try{
     const r=await fetch('/api/fs/list?path='+encodeURIComponent(path));
     const d=await r.json();
-    if(d.error){document.getElementById('fsbody').innerHTML=`<tr><td colspan="4" class="empty">${esc(d.error)}</td></tr>`;return;}
-    const rows=(d.entries||[]).map(e=>{
+    if(d.error){host.querySelector('.tbody').innerHTML=`<tr><td colspan="4" class="empty">${esc(d.error)}</td></tr>`;return;}
+    lastPaneRender[i]=d.entries||[];
+    const rows=(d.entries||[]).map((e,ix)=>{
       const full=(path==='/'?'':path)+'/'+e.name;
-      return `<tr>
-        <td>${e.is_dir?`<span class="fname dir" onclick="nav('${esc(full)}')">📁 ${esc(e.name)}/</span>`:'<span>'+esc(e.name)+'</span>'}</td>
+      return `<tr id="p${i}r${ix}">
+        <td>${e.is_dir
+          ?`<span class="fname dir" onclick="paneNav(${i},'${esc(full)}')">${esc(e.name)}/</span>`
+          :`<span class="fname" onclick="selRow(${i},${ix})">${esc(e.name)}</span>`}</td>
         <td style="color:var(--dim)">${e.is_dir?'—':fmtSize(e.size)}</td>
-        <td style="color:var(--dim)">${esc(e.is_dir?'dir':(e.name.split('.').pop()||'file'))}</td>
+        <td style="color:var(--dim)">${e.is_dir?'dir':(e.name.split('.').pop()||'file')}</td>
         <td>${e.is_dir?'':`<a class="btn ghost small" href="/api/fs/download?path=${encodeURIComponent(full)}">get</a>`}</td></tr>`;
     }).join('');
-    document.getElementById('fsbody').innerHTML=rows||'<tr><td colspan="4" class="empty">Empty</td></tr>';
-  }catch(e){document.getElementById('fsbody').innerHTML=`<tr><td colspan="4" class="empty">fs error: ${esc(e.message)}</td></tr>`;}
+    host.querySelector('.tbody').innerHTML=rows||'<tr><td colspan="4" class="empty">Empty</td></tr>';
+  }catch(e){host.querySelector('.tbody').innerHTML=`<tr><td colspan="4" class="empty">error: ${esc(e.message)}</td></tr>`;}
 }
+
+let selected={};  // pane -> full path of selected file
+function selRow(i,ix){
+  const e=(lastPaneRender[i]||[])[ix]; if(!e)return;
+  selected[i]=(PANES[i].path==='/'?'':PANES[i].path)+'/'+e.name;
+  document.querySelectorAll(`#pane${i} tr`).forEach(tr=>tr.style.background='');
+  const tr=document.getElementById(`p${i}r${ix}`); if(tr)tr.style.background='var(--panel2)';
+}
+
+function paneActions(i){
+  const src=selected[i], dst=PANES[otherPane(i)].path;
+  return `
+   <button class="btn small" ${src?'':'disabled style="opacity:.45"'} onclick="fsOp('copy',${i})">Copy →</button>
+   <button class="btn small" ${src?'':'disabled style="opacity:.45"'} onclick="fsOp('move',${i})">Move →</button>
+   <button class="btn small ghost" onclick="paneMkdir(${i})">+Folder</button>
+   <button class="btn small ghost" style="color:var(--err)" ${src?'':'disabled style="opacity:.45"'} onclick="paneDelete(${i})">Delete</button>`;
+}
+
+async function fsOp(op,i){
+  const src=selected[i]; if(!src)return flash('select a file first');
+  const dst=PANES[otherPane(i)].path;
+  if(!confirm(`${op} ${src} → ${dst}?`))return;
+  const r=await fetch('/api/fs/'+op,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({src,dst_dir:dst})});
+  const d=await r.json().catch(()=>({}));
+  flash(d.ok?`${op} done`:('failed: '+(d.error||r.status)));
+  delete selected[i]; paneNav(i,PANES[i].path); paneNav(otherPane(i),PANES[otherPane(i)].path);
+}
+async function paneMkdir(i){
+  const name=prompt('New folder name:'); if(!name)return;
+  const p=(PANES[i].path==='/'?'':PANES[i].path)+'/'+name;
+  const r=await fetch('/api/fs/mkdir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});
+  const d=await r.json().catch(()=>({}));
+  flash(d.ok?'created':'failed: '+(d.error||r.status));
+  paneNav(i,PANES[i].path);
+}
+async function paneDelete(i){
+  const src=selected[i]; if(!src)return flash('select a file first');
+  if(!confirm('Delete '+src+'? This cannot be undone.'))return;
+  const r=await fetch('/api/fs/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:src})});
+  const d=await r.json().catch(()=>({}));
+  flash(d.ok?'deleted':'failed: '+(d.error||r.status));
+  delete selected[i]; paneNav(i,PANES[i].path);
+}
+
+function renderPanes(){
+  const dp=document.getElementById('dualpane');
+  dp.innerHTML=[0,1].map(i=>`
+    <div class="panel" id="pane${i}" style="padding:14px">
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn ghost small" onclick="paneNav(${i},'/mnt')">/mnt</button>
+        <button class="btn ghost small" onclick="paneNav(${i},'/data')">/data</button>
+        <button class="btn ghost small" onclick="paneNav(${i},'/')">/</button>
+        <button class="btn ghost small" onclick="paneNav(${i},parentOf(PANES[${i}].path))">↑</button>
+        <span style="margin-left:auto">${paneActions(i)}</span>
+      </div>
+      <div class="crumbs"><b id="pp${i}"></b></div>
+      <table><thead><tr><th>Name</th><th style="width:90px">Size</th><th style="width:80px">Type</th><th style="width:60px"></th></tr></thead>
+      <tbody class="tbody"></tbody></table>
+    </div>`).join('');
+  [0,1].forEach(i=>{paneNav(i,PANES[i].path);
+    setInterval(()=>{const el=document.getElementById('pp'+i);if(el)el.textContent=PANES[i].path;},400);});
+}
+function nav(path){paneNav(activePane,path);}  // legacy hook
 
 // ---- status ----
 async function loadStatus(){
