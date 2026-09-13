@@ -74,7 +74,8 @@
 <main>
   <section id="tab-store">
     <div class="row">
-      <input type="text" id="caturl" value="https://pegasus-catalog.fly.dev/catalogs/dlps.json" placeholder="Catalog JSON URL">
+      <select id="catsel" onchange="pickCatalog()" style="background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 12px;font:inherit"></select>
+      <input type="text" id="caturl" placeholder="Catalog JSON URL">
       <button class="btn" onclick="loadCatalog()">Load</button>
       <input type="text" id="q" placeholder="Search…" style="min-width:200px;flex:0 0 260px" oninput="renderStore()">
       <span id="catinfo" style="color:var(--dim)"></span>
@@ -129,6 +130,25 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function fmtSize(n){if(n==null)return '—';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++;}return n.toFixed(n>=100||i==0?0:1)+' '+u[i];}
 
 // ---- store ----
+const DIR_URL='https://pegasus-catalog.fly.dev/api/catalogs';
+async function initCatalogDir(){
+  const sel=document.getElementById('catsel');
+  sel.innerHTML='<option value="">loading sources…</option>';
+  try{
+    const r=await fetch(DIR_URL); const d=await r.json();
+    sel.innerHTML='<option value="">— pick a source —</option>'+
+      (d.catalogs||[]).map(c=>`<option value="${esc(c.sourceUrl)}">${esc(c.name)} (${c.packageCount})</option>`).join('')+
+      '<option value="custom">Custom URL…</option>';
+    // auto-load first
+    if((d.catalogs||[]).length){ sel.selectedIndex=1; pickCatalog(); }
+  }catch(e){ sel.innerHTML='<option value="">directory unreachable — use Custom URL</option>'; }
+}
+function pickCatalog(){
+  const sel=document.getElementById('catsel');
+  const u=document.getElementById('caturl');
+  if(sel.value==='custom'){ u.style.display=''; u.focus(); }
+  else if(sel.value){ u.style.display='none'; u.value=sel.value; loadCatalog(); }
+}
 async function loadCatalog(){
   const url=document.getElementById('caturl').value.trim();
   document.getElementById('catinfo').textContent='loading…';
@@ -228,7 +248,7 @@ async function loadStatus(){
   }catch(e){document.getElementById('statgrid').innerHTML='<div class="empty">offline?</div>';}
 }
 
-loadCatalog();
+initCatalogDir();
 </script>
 </body>
 </html>
