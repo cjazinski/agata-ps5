@@ -16,7 +16,7 @@
 typedef int (*sz_progress)(const char* name, unsigned long done);
 
 static ISzAlloc g_alloc = { SzAlloc, SzFree };
-static sz_progress g_cb = 0;
+int (*g_cb)(const char*, unsigned long) = 0;
 static unsigned long g_done_bytes = 0;
 static int g_crc_ready = 0;
 
@@ -37,7 +37,7 @@ static int ensure_dir(const char* path) {
 }
 
 /* Extract archive at arc_path into out_dir. Returns 0 on success. */
-int extract_7z(const char* arc_path, const char* out_dir,
+int extract_7z_progress(const char* arc_path, const char* out_dir,
                sz_progress cb, char* errbuf, size_t errcap) {
   g_cb = cb;
   g_done_bytes = 0;

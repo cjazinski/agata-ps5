@@ -77,7 +77,8 @@
       <select id="catsel" onchange="pickCatalog()" style="background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 12px;font:inherit"></select>
       <input type="text" id="caturl" placeholder="Catalog JSON URL">
       <button class="btn" onclick="loadCatalog()">Load</button>
-      <input type="text" id="q" placeholder="Search…" style="min-width:200px;flex:0 0 260px" oninput="renderStore()">
+      <label class="btn ghost" style="cursor:pointer">Upload… <input type="file" accept=".json,application/json" style="display:none" onchange="uploadCatalog(this)"></label>
+      <input type="text" id="q" placeholder="Search…" style="min-width:200px;flex:0 0 220px" oninput="renderStore()">
       <span id="catinfo" style="color:var(--dim)"></span>
     </div>
     <div id="storegrid" class="grid"></div>
@@ -108,16 +109,18 @@
 let CATALOG=[], curPath='/mnt';
 
 // ---- nav ----
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+function showTab(name){
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
-  b.classList.add('active');
+  const btn=document.querySelector(`nav button[data-tab="${name}"]`);
+  if(btn)btn.classList.add('active');
   ['store','files','downloads','status'].forEach(t=>
-    document.getElementById('tab-'+t).style.display = t===b.dataset.tab?'':'none');
-  if(b.dataset.tab==='files') renderPanes();
-  if(b.dataset.tab==='downloads') refreshJobs();
-  if(b.dataset.tab==='status') loadStatus();
-  if(b.dataset.tab==='store') renderStore();
-});
+    document.getElementById('tab-'+t).style.display = t===name?'':'none');
+  if(name==='files') renderPanes();
+  if(name==='downloads') refreshJobs();
+  if(name==='status') loadStatus();
+  if(name==='store') renderStore();
+}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
 function flash(msg){const f=document.getElementById('flash');f.textContent=msg;f.style.display='block';setTimeout(()=>f.style.display='none',2600);}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -146,12 +149,45 @@ function pickCatalog(){
 async function loadCatalog(){
   const url=document.getElementById('caturl').value.trim();
   document.getElementById('catinfo').textContent='loading…';
-  try{
-    const r=await fetch(url); const d=await r.json();
-    CATALOG=d.packages||[];
-    document.getElementById('catinfo').textContent=`${esc(d.name||'catalog')} — ${CATALOG.length} packages`;
-  }catch(e){document.getElementById('catinfo').textContent='load failed: '+e.message;}
+  // try direct first, then via CORS-friendly fallbacks
+  const attempts = url.startsWith('/api/catalog') ? [url] :
+    [url, 'https://corsproxy.io/?'+encodeURIComponent(url), 'https://api.allorigins.win/raw?url='+encodeURIComponent(url)];
+  let d=null, lastErr='';
+  for(const u of attempts){
+    try{
+      const r=await fetch(u);
+      d=await r.json();
+      if(d && (d.packages || d.catalogs)) break;
+      lastErr='unexpected JSON shape';
+      d=null;
+    }catch(e){ lastErr=e.message; }
+  }
+  if(!d){ document.getElementById('catinfo').textContent='load failed: '+lastErr; return; }
+  if(d.catalogs){  // directory response
+    const sel=document.getElementById('catsel');
+    sel.innerHTML='<option value="">— pick a source —</option>'+
+      d.catalogs.map(c=>`<option value="${esc(c.sourceUrl)}">${esc(c.name)} (${c.packageCount})</option>`).join('')+
+      '<option value="custom">Custom URL…</option>';
+    document.getElementById('catinfo').textContent=d.catalogs.length+' sources';
+    if(d.catalogs.length){ sel.selectedIndex=1; pickCatalog(); }
+    return;
+  }
+  CATALOG=d.packages||[];
+  document.getElementById('catinfo').textContent=`${esc(d.name||'catalog')} — ${CATALOG.length} packages`;
   renderStore();
+}
+async function uploadCatalog(inp){
+  const f=inp.files[0]; if(!f)return;
+  document.getElementById('catinfo').textContent='uploading '+f.name+'…';
+  try{
+    const text=await f.text();
+    const r=await fetch('/api/catalog',{method:'POST',body:text});
+    if(!r.ok) throw new Error('store failed ('+r.status+')');
+    const d=await (await fetch('/api/catalog')).json();
+    CATALOG=d.packages||[];
+    document.getElementById('catinfo').textContent=`${esc(d.name||f.name)} — ${CATALOG.length} packages (uploaded)`;
+    renderStore();
+  }catch(e){ document.getElementById('catinfo').textContent='upload failed: '+e.message; }
 }
 function renderStore(){
   const q=document.getElementById('q').value.toLowerCase();
@@ -203,10 +239,15 @@ async function refreshJobs(){
       const pct=x.total?(x.bytes*100/x.total):0;
       const st={'queued':'q','running':'run','done':'ok','error':'err'}[x.state]||'q';
       const label={queued:'queued',running:'running',done:'done',error:'error'}[x.state]||x.state;
-      return `<tr><td>${x.id}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.url)}">${esc(x.url)}</td>
+      const isExt=x.type==='extract';
+      const what=isExt?`extract ${esc(x.file)}${x.files?` — ${x.files} files`:''}`:esc(x.url);
+      const prog=isExt
+        ?`<span style="color:var(--dim);font-size:11.5px">${x.state==='running'?'working…':(x.files||0)+' files'}</span>`
+        :`<div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:${pct}%"></i></div>
+          <span style="color:var(--dim);font-size:11.5px;white-space:nowrap">${fmtSize(x.bytes)}${x.total?' / '+fmtSize(x.total):''}</span></div>`;
+      return `<tr><td>${x.id}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.url)}">${what}</td>
       <td><span class="pill ${st}">${label}</span></td>
-      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:${pct}%"></i></div>
-      <span style="color:var(--dim);font-size:11.5px;white-space:nowrap">${fmtSize(x.bytes)}${x.total?' / '+fmtSize(x.total):''}</span></div></td>
+      <td>${prog}</td>
       <td>${x.state==='error'?`<span title="${esc(x.error||'')}" style="color:var(--err);cursor:help">?</span>`:''}</td></tr>`;
     }).join('')||'<tr><td colspan="5" class="empty">No jobs</td></tr>';
   }catch(e){}
@@ -260,7 +301,9 @@ function paneActions(i){
    <button class="btn small" ${src?'':'disabled style="opacity:.45"'} onclick="fsOp('move',${i})">Move →</button>
    <button class="btn small" ${src&&/\.7z$/i.test(src)?'':'disabled style="opacity:.45"'} onclick="paneExtract(${i})">Extract →</button>
    <button class="btn small ghost" onclick="paneMkdir(${i})">+Folder</button>
-   <button class="btn small ghost" style="color:var(--err)" ${src?'':'disabled style="opacity:.45"'} onclick="paneDelete(${i})">Delete</button>`;
+   <button class="btn small ghost" ${src?'':'disabled style="opacity:.45"'} onclick="paneDelete(${i})">Delete</button>
+   <label class="btn small ghost" style="cursor:pointer">Upload <input type="file" style="display:none" onchange="paneUpload(${i},this)"></label>
+   <button class="btn small ghost" onclick="paneNav(${i},PANES[${i}].path)" title="refresh">⟳</button>`;
 }
 
 async function fsOp(op,i){
@@ -294,11 +337,23 @@ async function paneExtract(i){
   if(!/\.7z$/i.test(src))return flash('only .7z archives are supported');
   const dst=PANES[otherPane(i)].path;
   if(!confirm('Extract '+src+' to '+dst+'?'))return;
-  flash('extracting…');
   const r=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:src,dest_dir:dst})});
   const d=await r.json().catch(()=>({}));
-  flash(d.ok?'extracted to '+dst:'failed: '+(d.error||r.status));
-  paneNav(i,PANES[i].path); paneNav(otherPane(i),PANES[otherPane(i)].path);
+  if(d.ok){flash('extraction queued — see Downloads tab');showTab('downloads');}
+  else flash('failed: '+(d.error||r.status));
+}
+async function paneUpload(i,inp){
+  const f=inp.files[0]; if(!f)return;
+  const dest=(PANES[i].path==='/'?'':PANES[i].path)+'/'+f.name;
+  flash('uploading '+f.name+'…');
+  try{
+    const buf=await f.arrayBuffer();
+    const r=await fetch('/api/fs/upload?path='+encodeURIComponent(dest),{method:'PUT',body:buf});
+    const d=await r.json().catch(()=>({}));
+    flash(d.ok?('uploaded '+fmtSize(d.bytes)+' → '+dest):('failed: '+(d.error||r.status)));
+    paneNav(i,PANES[i].path);
+  }catch(e){ flash('upload failed: '+e.message); }
+  inp.value='';
 }
 
 function renderPanes(){

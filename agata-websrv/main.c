@@ -27,8 +27,10 @@
 #include "ui.h"      /* embedded SPA (generated from ui.html) */
 #include "http.h"    /* tiny http client + url parser */
 
-int extract_7z(const char* arc_path, const char* out_dir,
-               void* cb, char* errbuf, size_t errcap);
+int extract_7z_progress(const char* arc_path, const char* out_dir,
+                        void* cb, char* errbuf, size_t errcap);
+
+static int get_param(const char* req, const char* name, char* out, size_t cap);
 
 extern char** __ps5_argv;   /* argv access for process renaming (weak; may be 0) */
 __attribute__((weak)) char** __ps5_argv = 0;
@@ -52,18 +54,21 @@ static void notify(const char* msg) {
   g_notify(0, &req, sizeof req, 0);
 }
 
-/* ---------------- download jobs ---------------- */
+/* ---------------- job queue (downloads + extractions) ---------------- */
 
 typedef enum { J_QUEUED, J_RUNNING, J_DONE, J_ERROR } jstate;
+typedef enum { JT_DOWNLOAD, JT_EXTRACT } jtype;
 
 typedef struct job {
   int id;
   jstate state;
-  char url[1024];
+  jtype type;              /* download or extract */
+  char url[1024];          /* download: url / extract: archive path */
   char dest[512];
   char fname[256];
-  unsigned long bytes;
+  unsigned long bytes;     /* progress */
   unsigned long total;
+  unsigned long files_done;/* extract: files extracted */
   char error[128];
 } job_t;
 
@@ -78,6 +83,7 @@ static int job_add(const char* url, const char* dest) {
   job_t* j = &g_jobs[g_job_count++];
   j->id = g_next_id++;
   j->state = J_QUEUED;
+  j->type = JT_DOWNLOAD;
   strncpy(j->url, url, sizeof j->url - 1);
   strncpy(j->dest, dest, sizeof j->dest - 1);
   /* filename from URL path */
@@ -89,6 +95,40 @@ static int job_add(const char* url, const char* dest) {
   j->fname[n] = '\0';
   if(!j->fname[0]) strcpy(j->fname, "download.bin");
   j->bytes = j->total = 0;
+  j->error[0] = '\0';
+  int id = j->id;
+  pthread_mutex_unlock(&g_jobs_mtx);
+  return id;
+}
+
+/* extraction progress callback — updates the job row; never cancels */
+static job_t* g_extract_job = 0;
+static int extract_progress(const char* name, unsigned long done) {
+  (void)name;
+  if(g_extract_job) {
+    pthread_mutex_lock(&g_jobs_mtx);
+    g_extract_job->files_done++;
+    g_extract_job->bytes = done;
+    pthread_mutex_unlock(&g_jobs_mtx);
+  }
+  return 0;
+}
+typedef int (*sz_progress_fn)(const char*, unsigned long);
+int extract_7z_progress(const char* arc, const char* out,
+                        void* cb, char* errbuf, size_t errcap);
+
+static int job_add_extract(const char* arc_path, const char* dest) {
+  pthread_mutex_lock(&g_jobs_mtx);
+  if(g_job_count >= MAX_JOBS) { pthread_mutex_unlock(&g_jobs_mtx); return -1; }
+  job_t* j = &g_jobs[g_job_count++];
+  j->id = g_next_id++;
+  j->state = J_QUEUED;
+  j->type = JT_EXTRACT;
+  strncpy(j->url, arc_path, sizeof j->url - 1);
+  strncpy(j->dest, dest, sizeof j->dest - 1);
+  const char* slash = strrchr(arc_path, '/');
+  strncpy(j->fname, slash ? slash + 1 : arc_path, sizeof j->fname - 1);
+  j->bytes = j->total = j->files_done = 0;
   j->error[0] = '\0';
   int id = j->id;
   pthread_mutex_unlock(&g_jobs_mtx);
@@ -107,16 +147,35 @@ static void* job_worker(void* arg) {
     pthread_mutex_unlock(&g_jobs_mtx);
     if(!j) { sleep(1); continue; }
 
-    char path[768];
-    snprintf(path, sizeof path, "%s/%s", j->dest, j->fname);
-    if(http_download_to(j->url, path, &j->bytes, &j->total, j->error, sizeof j->error) == 0) {
-      pthread_mutex_lock(&g_jobs_mtx); j->state = J_DONE; pthread_mutex_unlock(&g_jobs_mtx);
-      char msg[120]; snprintf(msg, sizeof msg, "Agata: %s finished", j->fname);
-      notify(msg);
+    if(j->type == JT_DOWNLOAD) {
+      char path[768];
+      snprintf(path, sizeof path, "%s/%s", j->dest, j->fname);
+      if(http_download_to(j->url, path, &j->bytes, &j->total, j->error, sizeof j->error) == 0) {
+        pthread_mutex_lock(&g_jobs_mtx); j->state = J_DONE; pthread_mutex_unlock(&g_jobs_mtx);
+        char msg[120]; snprintf(msg, sizeof msg, "Agata: %s finished", j->fname);
+        notify(msg);
+      } else {
+        pthread_mutex_lock(&g_jobs_mtx);
+        if(j->state != J_ERROR) j->state = J_ERROR;
+        pthread_mutex_unlock(&g_jobs_mtx);
+      }
     } else {
+      /* extraction job */
+      g_extract_job = j;
+      char errbuf[256] = "";
+      /* rough total: archive size as a stand-in until per-file counts show */
+      struct stat st;
+      if(stat(j->url, &st) == 0) { pthread_mutex_lock(&g_jobs_mtx); j->total = st.st_size; pthread_mutex_unlock(&g_jobs_mtx); }
+      int rc = extract_7z_progress(j->url, j->dest, extract_progress, errbuf, sizeof errbuf);
+      g_extract_job = 0;
       pthread_mutex_lock(&g_jobs_mtx);
-      if(j->state != J_ERROR) j->state = J_ERROR; /* canceled mid-download also lands here */
+      if(rc == 0) j->state = J_DONE;
+      else { j->state = J_ERROR; strncpy(j->error, errbuf, sizeof j->error - 1); }
       pthread_mutex_unlock(&g_jobs_mtx);
+      if(rc == 0) {
+        char msg[160]; snprintf(msg, sizeof msg, "Agata: extracted %s (%lu files)", j->fname, j->files_done);
+        notify(msg);
+      }
     }
   }
   return 0;
@@ -259,10 +318,11 @@ static void h_jobs(int c) {
     jstr(er, sizeof er, j->error);
     const char* st = j->state == J_QUEUED ? "queued" : j->state == J_RUNNING ? "running"
                    : j->state == J_DONE ? "done" : "error";
+    const char* ty = j->type == JT_EXTRACT ? "extract" : "download";
     int n = snprintf(buf + used, 65536 - used,
-      "%s{\"id\":%d,\"state\":\"%s\",\"url\":%s,\"dest\":%s,\"file\":%s,"
-      "\"bytes\":%lu,\"total\":%lu,\"error\":%s}",
-      i ? "," : "", j->id, st, u, dst, fn, j->bytes, j->total, er);
+      "%s{\"id\":%d,\"state\":\"%s\",\"type\":\"%s\",\"url\":%s,\"dest\":%s,\"file\":%s,"
+      "\"bytes\":%lu,\"total\":%lu,\"files\":%lu,\"error\":%s}",
+      i ? "," : "", j->id, st, ty, u, dst, fn, j->bytes, j->total, j->files_done, er);
     if(n < 0 || (size_t)n >= 65536 - used) break;
     used += n;
   }
@@ -270,6 +330,67 @@ static void h_jobs(int c) {
   pthread_mutex_unlock(&g_jobs_mtx);
   resp_raw(c, "200 OK", "application/json", buf, used);
   free(buf);
+}
+
+/* ---------------- catalog store (same-origin catalog serving) ---------------- */
+
+static pthread_mutex_t g_cat_mtx = PTHREAD_MUTEX_INITIALIZER;
+static char* g_catalog = 0;        /* last stored catalog JSON */
+static size_t g_catalog_len = 0;
+
+/* read a full request body given the header block in buf (n bytes read so far).
+ * returns malloc'd buffer (caller frees) or 0. */
+static char* read_body(int c, char* buf, size_t n, size_t* out_len) {
+  buf[n] = '\0';
+  long clen = 0;
+  char* cl = strstr(buf, "Content-Length:");
+  if(!cl) cl = strstr(buf, "content-length:");
+  if(cl) clen = strtol(cl + 15, 0, 10);
+  if(clen <= 0 || clen > 32*1024*1024) return 0;
+
+  char* body = malloc(clen + 1);
+  if(!body) return 0;
+  char* p = strstr(buf, "\r\n\r\n");
+  size_t have = 0;
+  if(p) { have = n - (size_t)(p + 4 - buf); memcpy(body, p + 4, have); }
+  while(have < (size_t)clen) {
+    ssize_t r = read(c, body + have, clen - have);
+    if(r <= 0) break;
+    have += r;
+  }
+  body[have] = '\0';
+  *out_len = have;
+  return body;
+}
+
+/* POST /api/catalog — store catalog JSON (from browser upload) */
+static void h_catalog_store(int c, char* body, size_t len) {
+  char ack[64];
+  snprintf(ack, sizeof ack, "{\"ok\":true,\"bytes\":%zu}", len);
+  pthread_mutex_lock(&g_cat_mtx);
+  char* old = g_catalog;
+  g_catalog = body;   /* take ownership */
+  g_catalog_len = len;
+  pthread_mutex_unlock(&g_cat_mtx);
+  free(old);
+  resp_json(c, 200, ack);
+}
+
+/* GET /api/catalog — serve stored catalog */
+static void h_catalog_get(int c) {
+  pthread_mutex_lock(&g_cat_mtx);
+  if(!g_catalog) {
+    pthread_mutex_unlock(&g_cat_mtx);
+    resp_json(c, 400, "{\"error\":\"no catalog stored\"}");
+    return;
+  }
+  /* copy under lock so we can release before the slow write */
+  size_t len = g_catalog_len;
+  char* copy = malloc(len);
+  memcpy(copy, g_catalog, len);
+  pthread_mutex_unlock(&g_cat_mtx);
+  resp_raw(c, "200 OK", "application/json", copy, len);
+  free(copy);
 }
 
 /* ---- fs operations (move/copy/mkdir/delete) ---- */
@@ -358,28 +479,46 @@ static void h_fs_op(int c, const char* op, const char* body) {
   else { char b[256]; snprintf(b, sizeof b, "{\"error\":\"%s: %s\"}", op, strerror(errno)); resp_json(c, 400, b); }
 }
 
-/* POST /api/extract {path, dest_dir} — extract a .7z archive */
+/* POST /api/extract {path, dest_dir} — queue a .7z extraction job */
 static void h_extract(int c, const char* body) {
   char path[1024], dest[1024];
   json_str_get(body, "path", path, sizeof path);
   json_str_get(body, "dest_dir", dest, sizeof dest);
   if(!path[0]) { resp_json(c, 400, "{\"error\":\"path required\"}"); return; }
   if(!dest[0]) {
-    /* default: extract beside the archive into <name>_x/ */
     char* dot = strrchr(path, '.');
     if(dot) snprintf(dest, sizeof dest, "%.*s_x", (int)(dot - path), path);
     else snprintf(dest, sizeof dest, "%s_x", path);
   }
-  char errbuf[256] = "";
-  if(extract_7z(path, dest, 0, errbuf, sizeof errbuf) == 0) {
-    char d[1200]; jstr(d, sizeof d, dest);
-    char b[1400]; snprintf(b, sizeof b, "{\"ok\":true,\"dest\":%s}", d);
-    resp_json(c, 200, b);
-  } else {
-    char e[400]; jstr(e, sizeof e, errbuf);
-    char b[500]; snprintf(b, sizeof b, "{\"error\":%s}", e);
-    resp_json(c, 400, b);
+  int id = job_add_extract(path, dest);
+  if(id < 0) { resp_json(c, 400, "{\"error\":\"queue full\"}"); return; }
+  char b[128];
+  snprintf(b, sizeof b, "{\"ok\":true,\"id\":%d}", id);
+  resp_json(c, 200, b);
+}
+
+/* PUT /api/fs/upload?path=/dest/dir/filename — raw body upload from browser */
+static void h_fs_upload(int c, const char* req, char* body, size_t len) {
+  char ppath[1024];
+  if(get_param(req, "path", ppath, sizeof ppath) != 0 || !ppath[0]) {
+    free(body);
+    resp_json(c, 400, "{\"error\":\"path required\"}");
+    return;
   }
+  FILE* f = fopen(ppath, "wb");
+  if(!f) {
+    free(body);
+    char b[256]; char e[192]; jstr(e, sizeof e, strerror(errno));
+    snprintf(b, sizeof b, "{\"error\":\"upload: %s\"}", e);
+    resp_json(c, 400, b);
+    return;
+  }
+  size_t w = fwrite(body, 1, len, f);
+  fclose(f);
+  free(body);
+  char b[128];
+  snprintf(b, sizeof b, "{\"ok\":true,\"bytes\":%zu}", w);
+  resp_json(c, 200, b);
 }
 
 static const char STATUS_JSON[] =
@@ -494,6 +633,21 @@ int main() {
     } else if(strncmp(path, "/api/extract", 12) == 0) {
       char* body = strstr(buf, "\r\n\r\n");
       if(body) h_extract(c, body + 4);
+      else resp_json(c, 400, "{\"error\":\"body required\"}");
+    } else if(strncmp(path, "/api/catalog", 12) == 0) {
+      if(strncmp(buf, "POST", 4) == 0) {
+        size_t blen = 0;
+        char* body = read_body(c, buf, (size_t)n, &blen);
+        if(body) h_catalog_store(c, body, blen);
+        else resp_json(c, 400, "{\"error\":\"body required\"}");
+        /* note: h_catalog_store takes ownership of body */
+      } else {
+        h_catalog_get(c);
+      }
+    } else if(strncmp(path, "/api/fs/upload", 14) == 0) {
+      size_t blen = 0;
+      char* body = read_body(c, buf, (size_t)n, &blen);
+      if(body) h_fs_upload(c, buf, body, blen);
       else resp_json(c, 400, "{\"error\":\"body required\"}");
     } else if(strncmp(path, "/api/jobs", 9) == 0) {
       h_jobs(c);
