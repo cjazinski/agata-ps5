@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agata PS5</title>
+<style>
+  :root{
+    --bg:#0f0f10; --panel:#16171b; --panel2:#1d1e24; --line:#2a2b33;
+    --text:#e8e8ea; --dim:#9a9ba3; --accent:#2d6cff; --accent2:#4c8bff;
+    --ok:#3fb950; --err:#f85149; --warn:#d29922; --radius:12px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+  header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:28px;padding:14px 28px;background:rgba(15,15,16,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .brand{font-size:17px;font-weight:700;letter-spacing:.12em;color:var(--accent2)}
+  nav{display:flex;gap:4px}
+  nav button{background:none;border:none;color:var(--dim);font:inherit;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer}
+  nav button:hover{color:var(--text);background:var(--panel2)}
+  nav button.active{color:var(--text);background:var(--panel2)}
+  main{padding:24px 28px;max-width:1400px;margin:0 auto}
+  .row{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  input[type=text]{background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 14px;font:inherit;min-width:340px;flex:1}
+  input[type=text]:focus{outline:none;border-color:var(--accent)}
+  .btn{background:var(--accent);border:none;color:#fff;font:inherit;font-weight:600;padding:9px 18px;border-radius:8px;cursor:pointer}
+  .btn:hover{background:var(--accent2)}
+  .btn.ghost{background:var(--panel2);color:var(--text)}
+  .btn.small{padding:5px 12px;font-size:12.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;cursor:pointer;transition:transform .12s,border-color .12s}
+  .card:hover{transform:translateY(-3px);border-color:var(--accent)}
+  .card .poster{aspect-ratio:2/3;width:100%;object-fit:cover;background:var(--panel2);display:block}
+  .card .meta{padding:10px 12px}
+  .card .t{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .s{color:var(--dim);font-size:11.5px;margin-top:2px}
+  .empty{color:var(--dim);padding:40px;text-align:center}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13.5px}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  tr:hover td{background:var(--panel2)}
+  td .fname{color:var(--text);cursor:pointer}
+  td .fname.dir{color:var(--accent2);cursor:pointer}
+  .bar{height:7px;background:var(--panel2);border-radius:4px;overflow:hidden;min-width:120px}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .4s}
+  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600}
+  .pill.ok{background:#12351c;color:var(--ok)} .pill.err{background:#3d1412;color:var(--err)}
+  .pill.run{background:#12233f;color:var(--accent2)} .pill.q{background:#2b230d;color:var(--warn)}
+  #detail{position:fixed;inset:0;background:rgba(0,0,0,.66);display:none;align-items:center;justify-content:center;z-index:20}
+  #detail .box{background:var(--panel);border:1px solid var(--line);border-radius:16px;max-width:680px;width:92%;max-height:86vh;overflow:auto;padding:24px}
+  #detail h2{margin-bottom:4px} #detail .sub{color:var(--dim);margin-bottom:14px;font-size:12.5px}
+  #detail pre{white-space:pre-wrap;background:var(--panel2);border-radius:8px;padding:12px;font-size:12px;margin:12px 0;color:var(--dim)}
+  .linkrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .linkrow .n{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .crumbs{color:var(--dim);font-size:13px;margin-bottom:12px;word-break:break-all}
+  .crumbs b{color:var(--text)}
+  .stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .stat .kv{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .stat .k{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+  .stat .v{font-size:16px;font-weight:600;margin-top:4px}
+  .flash{position:fixed;bottom:20px;right:20px;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:12px 18px;display:none;z-index:30}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">AGATA&nbsp;PS5</div>
+  <nav>
+    <button data-tab="store" class="active">Store</button>
+    <button data-tab="files">Files</button>
+    <button data-tab="downloads">Downloads</button>
+    <button data-tab="status">Status</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-store">
+    <div class="row">
+      <input type="text" id="caturl" value="https://pegasus-catalog.fly.dev/catalogs/dlps.json" placeholder="Catalog JSON URL">
+      <button class="btn" onclick="loadCatalog()">Load</button>
+      <input type="text" id="q" placeholder="Search…" style="min-width:200px;flex:0 0 260px" oninput="renderStore()">
+      <span id="catinfo" style="color:var(--dim)"></span>
+    </div>
+    <div id="storegrid" class="grid"></div>
+  </section>
+
+  <section id="tab-files" style="display:none">
+    <div class="row">
+      <button class="btn ghost small" onclick="nav('/mnt')">/mnt</button>
+      <button class="btn ghost small" onclick="nav('/data')">/data</button>
+      <button class="btn ghost small" onclick="nav('/')">/</button>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="panel"><table><thead><tr><th>Name</th><th style="width:110px">Size</th><th style="width:150px">Type</th><th style="width:110px"></th></tr></thead><tbody id="fsbody"></tbody></table></div>
+  </section>
+
+  <section id="tab-downloads" style="display:none">
+    <div class="row">
+      <input type="text" id="manualurl" placeholder="Direct URL to download (http)">
+      <input type="text" id="manualdest" placeholder="/mnt/usb0" style="flex:0 0 220px">
+      <button class="btn" onclick="queueManual()">Queue</button>
+    </div>
+    <div class="panel"><table><thead><tr><th>#</th><th>URL</th><th style="width:90px">Status</th><th style="width:160px">Progress</th><th style="width:110px"></th></tr></thead><tbody id="jobsbody"></tbody></table></div>
+  </section>
+
+  <section id="tab-status" style="display:none">
+    <div class="stat" id="statgrid"></div>
+  </section>
+</main>
+
+<div id="detail"><div class="box" id="detailbox"></div></div>
+<div class="flash" id="flash"></div>
+
+<script>
+let CATALOG=[], curPath='/mnt';
+
+// ---- nav ----
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  ['store','files','downloads','status'].forEach(t=>
+    document.getElementById('tab-'+t).style.display = t===b.dataset.tab?'':'none');
+  if(b.dataset.tab==='files') nav(curPath);
+  if(b.dataset.tab==='downloads') refreshJobs();
+  if(b.dataset.tab==='status') loadStatus();
+  if(b.dataset.tab==='store') renderStore();
+});
+
+function flash(msg){const f=document.getElementById('flash');f.textContent=msg;f.style.display='block';setTimeout(()=>f.style.display='none',2600);}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function fmtSize(n){if(n==null)return '—';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++;}return n.toFixed(n>=100||i==0?0:1)+' '+u[i];}
+
+// ---- store ----
+async function loadCatalog(){
+  const url=document.getElementById('caturl').value.trim();
+  document.getElementById('catinfo').textContent='loading…';
+  try{
+    const r=await fetch(url); const d=await r.json();
+    CATALOG=d.packages||[];
+    document.getElementById('catinfo').textContent=`${esc(d.name||'catalog')} — ${CATALOG.length} packages`;
+  }catch(e){document.getElementById('catinfo').textContent='load failed: '+e.message;}
+  renderStore();
+}
+function renderStore(){
+  const q=document.getElementById('q').value.toLowerCase();
+  const g=document.getElementById('storegrid');
+  const list=CATALOG.filter(p=>!q||(p.title+' '+(p.titleId||'')+' '+(p.category||'')).toLowerCase().includes(q));
+  if(!list.length){g.innerHTML='<div class="empty">No packages — load a catalog URL above.</div>';return;}
+  g.innerHTML=list.slice(0,400).map((p,i)=>`
+    <div class="card" onclick="showPkg(${CATALOG.indexOf(p)})">
+      ${p.posterUrl?`<img class="poster" loading="lazy" src="${esc(p.posterUrl)}" onerror="this.style.visibility='hidden'">`:'<div class="poster"></div>'}
+      <div class="meta"><div class="t" title="${esc(p.title)}">${esc(p.title)}</div>
+      <div class="s">${esc(p.titleId||'')}${p.version?' · v'+esc(p.version):''}</div></div>
+    </div>`).join('');
+}
+function showPkg(i){
+  const p=CATALOG[i]; if(!p)return;
+  document.getElementById('detailbox').innerHTML=`
+    <h2>${esc(p.title)}</h2>
+    <div class="sub">${esc(p.titleId||'')} · ${esc(p.category||'')}${p.version?' · v'+esc(p.version):''}</div>
+    ${p.description?`<pre>${esc(p.description)}</pre>`:''}
+    ${(p.downloadLinks||[]).map((l,j)=>`
+      <div class="linkrow"><span class="n" title="${esc(l.url)}">${esc(l.name||l.url)}</span>
+      <button class="btn small" onclick="queueLink('${esc(l.url)}')">Queue</button></div>`).join('')}
+    ${p.downloadSource?`<p style="margin-top:12px;color:var(--dim);font-size:12px">source: ${esc(p.downloadSource)}</p>`:''}
+    <div style="margin-top:16px;text-align:right"><button class="btn ghost" onclick="closeDetail()">Close</button></div>`;
+  document.getElementById('detail').style.display='flex';
+}
+function closeDetail(){document.getElementById('detail').style.display='none';}
+document.getElementById('detail').onclick=e=>{if(e.target.id==='detail')closeDetail();};
+
+// ---- downloads ----
+async function queueLink(url){
+  const dest=prompt('Download to:','/mnt/usb0'); if(!dest)return;
+  const r=await fetch('/api/fetch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url,dest})});
+  flash(r.ok?'Queued: '+url.slice(0,60)+'…':'Queue failed'); closeDetail();
+}
+async function queueManual(){
+  const url=document.getElementById('manualurl').value.trim();
+  const dest=document.getElementById('manualdest').value.trim()||'/mnt/usb0';
+  if(!url)return;
+  const r=await fetch('/api/fetch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url,dest})});
+  flash(r.ok?'Queued':'Queue failed');
+}
+async function refreshJobs(){
+  try{
+    const r=await fetch('/api/jobs'); const j=await r.json();
+    document.getElementById('jobsbody').innerHTML=(j.jobs||[]).map(x=>{
+      const pct=x.total?(x.bytes*100/x.total):0;
+      const st={'queued':'q','running':'run','done':'ok','error':'err'}[x.state]||'q';
+      const label={queued:'queued',running:'running',done:'done',error:'error'}[x.state]||x.state;
+      return `<tr><td>${x.id}</td><td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(x.url)}">${esc(x.url)}</td>
+      <td><span class="pill ${st}">${label}</span></td>
+      <td><div style="display:flex;align-items:center;gap:8px"><div class="bar"><i style="width:${pct}%"></i></div>
+      <span style="color:var(--dim);font-size:11.5px;white-space:nowrap">${fmtSize(x.bytes)}${x.total?' / '+fmtSize(x.total):''}</span></div></td>
+      <td>${x.state==='error'?`<span title="${esc(x.error||'')}" style="color:var(--err);cursor:help">?</span>`:''}</td></tr>`;
+    }).join('')||'<tr><td colspan="5" class="empty">No jobs</td></tr>';
+  }catch(e){}
+}
+setInterval(()=>{if(document.getElementById('tab-downloads').style.display!=='none')refreshJobs();},2000);
+
+// ---- files ----
+async function nav(path){
+  curPath=path;
+  document.getElementById('crumbs').innerHTML='path: <b>'+esc(path)+'</b>';
+  try{
+    const r=await fetch('/api/fs/list?path='+encodeURIComponent(path));
+    const d=await r.json();
+    if(d.error){document.getElementById('fsbody').innerHTML=`<tr><td colspan="4" class="empty">${esc(d.error)}</td></tr>`;return;}
+    const rows=(d.entries||[]).map(e=>{
+      const full=(path==='/'?'':path)+'/'+e.name;
+      return `<tr>
+        <td>${e.is_dir?`<span class="fname dir" onclick="nav('${esc(full)}')">📁 ${esc(e.name)}/</span>`:'<span>'+esc(e.name)+'</span>'}</td>
+        <td style="color:var(--dim)">${e.is_dir?'—':fmtSize(e.size)}</td>
+        <td style="color:var(--dim)">${esc(e.is_dir?'dir':(e.name.split('.').pop()||'file'))}</td>
+        <td>${e.is_dir?'':`<a class="btn ghost small" href="/api/fs/download?path=${encodeURIComponent(full)}">get</a>`}</td></tr>`;
+    }).join('');
+    document.getElementById('fsbody').innerHTML=rows||'<tr><td colspan="4" class="empty">Empty</td></tr>';
+  }catch(e){document.getElementById('fsbody').innerHTML=`<tr><td colspan="4" class="empty">fs error: ${esc(e.message)}</td></tr>`;}
+}
+
+// ---- status ----
+async function loadStatus(){
+  try{
+    const r=await fetch('/status'); const d=await r.json();
+    document.getElementById('statgrid').innerHTML=Object.entries(d).map(([k,v])=>
+      `<div class="kv"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  }catch(e){document.getElementById('statgrid').innerHTML='<div class="empty">offline?</div>';}
+}
+
+loadCatalog();
+</script>
+</body>
+</html>

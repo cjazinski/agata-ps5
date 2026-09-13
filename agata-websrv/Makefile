@@ -14,8 +14,11 @@ CFLAGS := -Wall -Werror -g
 
 all: $(ELF)
 
-$(ELF): main.c
-	$(CC) $(CFLAGS) -o $@ $^
+ui.h: ui.html embed_ui.py
+	python3 embed_ui.py ui.html ui.h
+
+$(ELF): main.c http.h ui.h
+	$(CC) $(CFLAGS) -o $@ main.c -lpthread
 
 clean:
 	rm -f $(ELF)
