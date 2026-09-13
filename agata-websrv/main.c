@@ -30,6 +30,9 @@
 int extract_7z(const char* arc_path, const char* out_dir,
                void* cb, char* errbuf, size_t errcap);
 
+extern char** __ps5_argv;   /* argv access for process renaming (weak; may be 0) */
+__attribute__((weak)) char** __ps5_argv = 0;
+
 #define PORT        6971
 #define MAX_JOBS    64
 #define RBUF        16384
@@ -380,8 +383,8 @@ static void h_extract(int c, const char* body) {
 }
 
 static const char STATUS_JSON[] =
-  "{\"app\":\"agata_ps5_websrv\",\"version\":\"0.2.0\",\"status\":\"running\","
-  "\"platform\":\"PS5\",\"sdk\":\"ps5-payload-sdk\",\"endpoints\":"
+  "{\"app\":\"agata_ps5_websrv\",\"version\":\"0.2.0\",\"build\":\"" BUILD_ID "\","
+  "\"status\":\"running\",\"platform\":\"PS5\",\"sdk\":\"ps5-payload-sdk\",\"endpoints\":"
   "[\"/\",\"/status\",\"/api/fs/list\",\"/api/fs/download\",\"/api/fetch\",\"/api/jobs\"]}";
 
 /* ---------------- main server ---------------- */
@@ -419,6 +422,17 @@ static int get_param(const char* req, const char* name, char* out, size_t cap) {
 
 int main() {
   g_notify = (notify_fn)dlsym(RTLD_DEFAULT, "sceKernelSendNotificationRequest");
+
+  /* give the process a real name (was showing as "payload.elf" in ps) */
+  {
+    void (*setname)(const char*) = (void(*)(const char*))dlsym(RTLD_DEFAULT, "setproctitle");
+    if(!setname) setname = (void(*)(const char*))dlsym(RTLD_DEFAULT, "setprogname");
+    if(setname) setname("agata_ps5_websrv");
+    /* also fix argv[0] for ps-style listings that read it */
+    if(__ps5_argv && __ps5_argv[0]) {
+      strncpy(__ps5_argv[0], "agata_ps5_websrv", 63);
+    }
+  }
 
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if(s < 0) { notify("agata: socket failed"); for(;;) pause(); }
@@ -491,7 +505,20 @@ int main() {
     } else if(strcmp(path, "/status") == 0) {
       resp_json(c, 200, STATUS_JSON);
     } else if(strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
-      resp_raw(c, "200 OK", "text/html; charset=utf-8", UI_HTML, UI_HTML_LEN);
+      /* inject build id into the page (replaces __BUILD_ID__ marker) */
+      static char page[UI_HTML_LEN + 64];
+      size_t n = 0;
+      const char* marker = strstr(UI_HTML, "__BUILD_ID__");
+      if(marker) {
+        size_t head = marker - UI_HTML;
+        memcpy(page, UI_HTML, head);
+        n = head;
+        n += snprintf(page + n, sizeof page - n, "%s", BUILD_ID);
+        n += snprintf(page + n, sizeof page - n, "%s", marker + 12);
+        resp_raw(c, "200 OK", "text/html; charset=utf-8", page, n);
+      } else {
+        resp_raw(c, "200 OK", "text/html; charset=utf-8", UI_HTML, UI_HTML_LEN);
+      }
     } else {
       resp_raw(c, "404 Not Found", "text/plain", "not found", 9);
     }

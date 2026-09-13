@@ -12,6 +12,11 @@ ELF := agata_ps5_websrv.elf
 
 CFLAGS := -Wall -Werror -g
 
+# embed git commit + build date so the UI can show exactly what's running
+BUILD_ID := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(shell date +%Y%m%d)
+CFLAGS += -DBUILD_ID=\"$(BUILD_ID)\"
+export BUILD_ID
+
 all: $(ELF)
 
 ui.h: ui.html embed_ui.py
