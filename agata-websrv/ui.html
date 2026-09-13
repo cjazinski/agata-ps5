@@ -258,6 +258,7 @@ function paneActions(i){
   return `
    <button class="btn small" ${src?'':'disabled style="opacity:.45"'} onclick="fsOp('copy',${i})">Copy →</button>
    <button class="btn small" ${src?'':'disabled style="opacity:.45"'} onclick="fsOp('move',${i})">Move →</button>
+   <button class="btn small" ${src&&/\.7z$/i.test(src)?'':'disabled style="opacity:.45"'} onclick="paneExtract(${i})">Extract →</button>
    <button class="btn small ghost" onclick="paneMkdir(${i})">+Folder</button>
    <button class="btn small ghost" style="color:var(--err)" ${src?'':'disabled style="opacity:.45"'} onclick="paneDelete(${i})">Delete</button>`;
 }
@@ -287,6 +288,17 @@ async function paneDelete(i){
   const d=await r.json().catch(()=>({}));
   flash(d.ok?'deleted':'failed: '+(d.error||r.status));
   delete selected[i]; paneNav(i,PANES[i].path);
+}
+async function paneExtract(i){
+  const src=selected[i]; if(!src)return flash('select a file first');
+  if(!/\.7z$/i.test(src))return flash('only .7z archives are supported');
+  const dst=PANES[otherPane(i)].path;
+  if(!confirm('Extract '+src+' to '+dst+'?'))return;
+  flash('extracting…');
+  const r=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:src,dest_dir:dst})});
+  const d=await r.json().catch(()=>({}));
+  flash(d.ok?'extracted to '+dst:'failed: '+(d.error||r.status));
+  paneNav(i,PANES[i].path); paneNav(otherPane(i),PANES[otherPane(i)].path);
 }
 
 function renderPanes(){

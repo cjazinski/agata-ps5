@@ -27,6 +27,9 @@
 #include "ui.h"      /* embedded SPA (generated from ui.html) */
 #include "http.h"    /* tiny http client + url parser */
 
+int extract_7z(const char* arc_path, const char* out_dir,
+               void* cb, char* errbuf, size_t errcap);
+
 #define PORT        6971
 #define MAX_JOBS    64
 #define RBUF        16384
@@ -352,6 +355,30 @@ static void h_fs_op(int c, const char* op, const char* body) {
   else { char b[256]; snprintf(b, sizeof b, "{\"error\":\"%s: %s\"}", op, strerror(errno)); resp_json(c, 400, b); }
 }
 
+/* POST /api/extract {path, dest_dir} — extract a .7z archive */
+static void h_extract(int c, const char* body) {
+  char path[1024], dest[1024];
+  json_str_get(body, "path", path, sizeof path);
+  json_str_get(body, "dest_dir", dest, sizeof dest);
+  if(!path[0]) { resp_json(c, 400, "{\"error\":\"path required\"}"); return; }
+  if(!dest[0]) {
+    /* default: extract beside the archive into <name>_x/ */
+    char* dot = strrchr(path, '.');
+    if(dot) snprintf(dest, sizeof dest, "%.*s_x", (int)(dot - path), path);
+    else snprintf(dest, sizeof dest, "%s_x", path);
+  }
+  char errbuf[256] = "";
+  if(extract_7z(path, dest, 0, errbuf, sizeof errbuf) == 0) {
+    char d[1200]; jstr(d, sizeof d, dest);
+    char b[1400]; snprintf(b, sizeof b, "{\"ok\":true,\"dest\":%s}", d);
+    resp_json(c, 200, b);
+  } else {
+    char e[400]; jstr(e, sizeof e, errbuf);
+    char b[500]; snprintf(b, sizeof b, "{\"error\":%s}", e);
+    resp_json(c, 400, b);
+  }
+}
+
 static const char STATUS_JSON[] =
   "{\"app\":\"agata_ps5_websrv\",\"version\":\"0.2.0\",\"status\":\"running\","
   "\"platform\":\"PS5\",\"sdk\":\"ps5-payload-sdk\",\"endpoints\":"
@@ -449,6 +476,10 @@ int main() {
                      : strncmp(path, "/api/fs/copy", 12) == 0 ? "copy"
                      : strncmp(path, "/api/fs/mkdir", 13) == 0 ? "mkdir" : "delete";
       if(body) h_fs_op(c, op, body + 4);
+      else resp_json(c, 400, "{\"error\":\"body required\"}");
+    } else if(strncmp(path, "/api/extract", 12) == 0) {
+      char* body = strstr(buf, "\r\n\r\n");
+      if(body) h_extract(c, body + 4);
       else resp_json(c, 400, "{\"error\":\"body required\"}");
     } else if(strncmp(path, "/api/jobs", 9) == 0) {
       h_jobs(c);
